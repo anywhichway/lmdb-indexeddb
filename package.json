@@ -1,0 +1,29 @@
+{
+  "name": "lmdb-indexeddb",
+  "version": "0.0.1",
+  "description": "LMDB API wrapped around IndexedDB to make LMDB available in the browser",
+  "main": "lmdb-indexeddb.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anywhichway/lmdb-indexeddb.git"
+  },
+  "keywords": [
+    "lmdb",
+    "indexeddb",
+    "transaction",
+    "database",
+    "no-sql"
+  ],
+  "author": "Simon Y. Blackwell",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/anywhichway/lmdb-indexeddb/issues"
+  },
+  "homepage": "https://github.com/anywhichway/lmdb-indexeddb#readme",
+  "devDependencies": {
+    "lmdb": "^2.7.11"
+  }
+}

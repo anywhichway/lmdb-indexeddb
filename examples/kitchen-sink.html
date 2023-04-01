@@ -1,34 +1,15 @@
-# lmdb-indexeddb
-LMDB API wrapped around IndexedDB to make LMDB available in the browser
-
-# Installation
-
-```javascript
-npm install lmdb-indexeddb
-```
-
-# Usage
-
-See [lmdb](https://github.com/kriszyp/lmdb-js) for documentation on the LMDB API.
-
-```javascript
-
-```javascript
-import {open} from "lmdb-indexeddb"
-```
-
-# Examples
-
-See the dircetory `examples` for examples.
-
-## Kitchen Sink
-
-```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+</head>
+<body>
 <script type="module">
     import {open} from "../lmdb-indexeddb.js";
     const db1 = await open("dummy",{useVersions:true,compression:true,cache:true}), //encryptionKey:"my password"
-            db2 = await db1.openDB("child",{useVersions:true,encryptionKey:"my password",cache:true}),
-            db3 = await db1.openDB("child2",{useVersions:true,encryptionKey:"my password",cache:true});
+        db2 = await db1.openDB("child",{useVersions:true,encryptionKey:"my password",cache:true}),
+        db3 = await db1.openDB("child2",{useVersions:true,encryptionKey:"my password",cache:true});
     console.log(db1.get("test1"));
     console.log(db2.get("test2"));
     await db1.put("test1","test1test1");
@@ -37,7 +18,7 @@ See the dircetory `examples` for examples.
     console.log(db2.get("test2"));
     console.log(await db1.getAsync("test1",true));
     console.log(await db2.getAsync("test2",true));
-    // await db1.remove("test1");
+   // await db1.remove("test1");
     // await db2.remove("test2");
     console.log(db1.get("test1"));
     console.log(db2.get("test2"));
@@ -95,16 +76,5 @@ See the dircetory `examples` for examples.
     await db3.drop();
 </script>
 
-```
-
-# Implementation Notes
-
-All API calls have the same sync or async signature as LMDB except `open` and `opendDB`, which are asynchronous only due to the nature of IndexedDB.
-
-In order to support a synchronous API, the IndexedDB API is wrapped in a synchronous API that uses an in memory cache of all entries in the local database. This cache is updated on every `put` and `delete` call. This means that the cache is always up-to-date unless the database is modified outside of the API.
-
-When an LMDB transaction is started it is done at a global level. All `put` and `delete` calls operate solely against a temporary cache until the user provided callback completes. Then an IndexedDB transaction is started and all changes are written to IndexedDB. If the user provided callback throws an error, the transaction is aborted and the primary cache and IndexedDB are not updated.
-
-# Updates (Reverse Chronological Order)
-
-2023-03-28 v0.0.1 Initial release. open, put, get, delete, transaction all at basic level of functionality
+</body>
+</html>
