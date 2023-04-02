@@ -380,7 +380,8 @@ let TRANSACTION;
 class LMDB {
     #cache;
     #clearing
-    #keys
+    #idb;
+    #keys;
     #lastVersion;
     #path;
     #name;
@@ -388,9 +389,10 @@ class LMDB {
     #encryptionKey;
     #compression;
     constructor({path,name=null,useVersions,encryptionKey,compression,entries,idb,...rest}) {
-        this.idb = idb;
+        Object.defineProperty(this,"idb",{value:idb});
+        this.#idb = idb;
         this.#path = path;
-        this.#name = name;
+        this.#name = name+"";
         this.#cache = {...entries};
         this.#keys = new Keys(Object.keys(entries));
         this.#useVersions = conditionalObjectCopy(useVersions);
@@ -448,6 +450,9 @@ class LMDB {
     get flushed() {
         return TRANSACTION===null;
     }
+    get idb() {
+        return this.#idb;
+    }
     get keys() {
         return [...this.#keys]
     }
@@ -457,13 +462,16 @@ class LMDB {
     get path() {
         return this.#path;
     }
+    get version() {
+        return this.#idb.version;
+    }
     clearSync() {
-        try { this.keys = [] } catch(e) {}; // this.keys may have been redefined by clone
-        this.#keys = [];
+        try { this.keys = new Keys() } catch(e) {}; // this.keys may have been redefined by transaction commit
+        this.#keys = new Keys();
         this.#cache = {};
         if(TRANSACTION) TRANSACTION.transaction.abort();
         this.#clearing = new Promise((resolve,reject) => {
-                const idbTransaction = this.idb.transaction([this.#name],"readwrite"),
+                const idbTransaction = this.#idb.transaction([this.#name],"readwrite"),
                     idbObjectStore = idbTransaction.objectStore(this.#name);
                 idbObjectStore.clear().withEventListener("success", (event) => {
                     this.#clearing = null;
@@ -477,12 +485,11 @@ class LMDB {
     async clearAsync() {
         return this.#clearing = new Promise((resolve,reject) => {
             setTimeout(() => {
-                this.clear();
-                try { this.keys = [] } catch(e) {}; // this.keys may have been redefined by clone
-                this.#keys = [];
+                try { this.keys = new Keys() } catch(e) {}; // this.keys may have been redefined by transaction commit
+                this.#keys = new Keys();
                 this.#cache = {};
                 if(TRANSACTION) TRANSACTION.transaction.abort();
-                const idbTransaction = this.idb.transaction([this.#name],"readwrite"),
+                const idbTransaction = this.#idb.transaction([this.#name],"readwrite"),
                     idbObjectStore = idbTransaction.objectStore(this.#name);
                 idbObjectStore.clear();
                 idbObjectStore.clear().withEventListener("success", (event) => {
@@ -494,8 +501,8 @@ class LMDB {
         })
     }
     async close() {
-        this.idb.close();
-        await waitForClose(this.idb);
+        this.#idb.close();
+        await waitForClose(this.#idb);
     }
     doesExist(key,version) {
         if(version && typeof(version)!=="number") throw new Error("Version must be a number. Value checking not supported");
@@ -507,7 +514,10 @@ class LMDB {
     drop() {
         new Promise(async (resolve,reject) => {
             if(TRANSACTION) TRANSACTION.transaction.abort();
-            this.clearSync();
+            await this.clearSync();
+            try { this.keys = null } catch(e) {}
+            this.#keys = null;
+            this.#cache = null;
             const request = indexedDB.deleteDatabase(this.#path+"/"+this.#name).withEventListener("success", async (event) => {
                 resolve();
             }).withEventListener("error", (event) => {
@@ -515,6 +525,16 @@ class LMDB {
                 reject(event.target.error);
             })
         });
+    }
+    dropSync() {
+            if(TRANSACTION) TRANSACTION.transaction.abort();
+            this.clearSync();
+            this.keys = null;
+            this.#keys = null;
+            this.#cache = null;
+            const request = indexedDB.deleteDatabase(this.#path+"/"+this.#name).withEventListener("error", (event) => {
+                console.error(event.target.error)
+            })
     }
     get(key) {
         if(TRANSACTION) return TRANSACTION.transaction.get(this,key);
@@ -561,7 +581,7 @@ class LMDB {
         const skey = toKey(key);
         let entry = this.#cache[skey];
         if(!entry || force) {
-            const idbTransaction = this.idb.transaction([this.#name],"readonly"),
+            const idbTransaction = this.#idb.transaction([this.#name],"readonly"),
                 idbObjectStore = idbTransaction.objectStore(this.#name);
             entry = await new Promise((resolve,reject) => {
                 idbObjectStore.get(skey).withEventListener("success", (event) => {
@@ -688,7 +708,7 @@ class LMDB {
         else entry.value = value;
         if(version) entry.version = version;
         return new Promise(async (resolve,reject) => {
-            const idbTransaction = this.idb.transaction([this.#name],"readwrite"),
+            const idbTransaction = this.#idb.transaction([this.#name],"readwrite"),
                 idbObjectStore = idbTransaction.objectStore(this.#name),
                 storedEntry = {version:entry.version,value:conditionalEncrypt(conditionalCompress(entry.value,this.compression),this.encryptionKey)};
             if(this.compression) storedEntry.compression = this.compression;
@@ -702,13 +722,33 @@ class LMDB {
             request.withEventListener("error", (event) => reject(event.target.error));
         })
     }
+    putSync(key,value,version=1,ifVersion) {
+        const skey = toKey(key);
+        if(TRANSACTION) return TRANSACTION.transaction.put(this,key,value,version,ifVersion);
+        let entry = this.getEntry(key);
+        if(ifVersion && (entry==null || !entry.version==ifVersion)) return false;
+        if(entry==null) entry = {version,value};
+        else entry.value = value;
+        if(version) entry.version = version;
+        const idbTransaction = this.#idb.transaction([this.#name],"readwrite"),
+            idbObjectStore = idbTransaction.objectStore(this.#name),
+            storedEntry = {version:entry.version,value:conditionalEncrypt(conditionalCompress(entry.value,this.compression),this.encryptionKey)};
+        if(this.compression) storedEntry.compression = this.compression;
+        if(this.encryptionKey) storedEntry.encrypted = true;
+        const request = idbObjectStore.put(storedEntry,skey);
+        idbTransaction.withEventListener("error", (event) => console.error(event.target.error));
+        request.withEventListener("error", (event) => console.error(event.target.error));
+        this.#cache[skey] = entry;
+        this.#keys.add(key);
+        return true
+    }
     async prefetch(keys,callback) {
         if(this.#clearing) {
             await this.#clearing;
             return;
         }
         return new Promise((resolve,reject) => {
-            const idbTransaction = this.idb.transaction([this.#name],"readwrite"),
+            const idbTransaction = this.#idb.transaction([this.#name],"readwrite"),
                 idbObjectStore = idbTransaction.objectStore(this.#name),
                 request = idbObjectStore.getAll();
             idbTransaction.withEventListener("error", (event) => reject(event.target.error));
@@ -726,9 +766,9 @@ class LMDB {
     async remove(key,ifVersion) {
         if(TRANSACTION) return TRANSACTION.transaction.remove(this,key,ifVersion)
         const entry = this.getEntry(key);
-        if(ifVersion && (!entry || entry.version!==ifVersion)) return false;
+        if(!entry || (ifVersion && entry.version!==ifVersion)) return false;
         return new Promise((resolve,reject) => {
-            const idbTransaction = this.idb.transaction([this.#name],"readwrite"),
+            const idbTransaction = this.#idb.transaction([this.#name],"readwrite"),
                 idbObjectStore = idbTransaction.objectStore(this.#name),
                 skey = toKey(key);
             idbTransaction.withEventListener("complete", (event) => {
@@ -736,10 +776,25 @@ class LMDB {
                     this.#cache[skey] = null;
                     this.#keys.remove(key);
                 }
-                resolve();
+                resolve(!!entry);
             }).withEventListener("error", (event) => reject(event.target.error));
             idbObjectStore.delete(skey).withEventListener("error", (event) => reject(event.target.error));
         })
+    }
+    removeSync(key,ifVersion) {
+        if(TRANSACTION) return TRANSACTION.transaction.remove(this,key,ifVersion)
+        const entry = this.getEntry(key);
+        if(!entry || (ifVersion && entry.version!==ifVersion)) return false;
+        const skey = toKey(key);
+        if(this.#cache[skey]!==undefined) {
+            this.#cache[skey] = null;
+            this.#keys.remove(key);
+        }
+        const idbTransaction = this.#idb.transaction([this.#name],"readwrite"),
+            idbObjectStore = idbTransaction.objectStore(this.#name);
+        idbTransaction.withEventListener("error", (event) => console.error(event.target.error));
+        idbObjectStore.delete(skey).withEventListener("error", (event) => console.error(error));
+        return true
     }
     resetReadTxn() {
         throw new Error("resetReadTxn not implemented. Use resetReadTxnAsync instead.");
@@ -747,7 +802,7 @@ class LMDB {
     async resetReadTxnAsync() {
         if(TRANSACTION) await TRANSACTION;
         return new Promise((resolve,reject) => {
-            const idb = this.idb,
+            const idb = this.#idb,
                 entries = {},
                 storeName = this.#name,
                 idbTransaction = idb.transaction([storeName],"readonly"),
@@ -782,7 +837,9 @@ class LMDB {
         setTimeout(async () => {
             try {
                 const result = await callback();
-                await transaction.commit(this);
+                if(result!==ABORT) {
+                    await transaction.commit(this);
+                }
                 resolver(result);
             } catch (e) {
                 rejector(e);
@@ -792,8 +849,12 @@ class LMDB {
         });
         return promise;
     }
+    async transactionSync(callback) {
+        throw new Error("transactionSync not implemented. Use transaction instead.");
+    }
 }
-
+const ABORT = {};
+Object.defineProperty(LMDB,"ABORT",{value:ABORT});
 
 const lmdbOpen = async (path,options={}) => {
     const databases = await indexedDB.databases(),
@@ -813,5 +874,4 @@ const lmdbOpen = async (path,options={}) => {
         })
     });
 }
-
-export {lmdbOpen as open}
+export {lmdbOpen as open,ABORT};

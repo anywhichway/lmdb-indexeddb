@@ -1,5 +1,7 @@
 # lmdb-indexeddb
-LMDB API wrapped around IndexedDB to make LMDB available in the browser
+LMDB API wrapped around IndexedDB to make LMDB available in the browser.
+
+This is ALPHA software. Many unit tests not yet in place.
 
 # Installation
 
@@ -103,8 +105,12 @@ All API calls have the same sync or async signature as LMDB except `open` and `o
 
 In order to support a synchronous API, the IndexedDB API is wrapped in a synchronous API that uses an in memory cache of all entries in the local database. This cache is updated on every `put` and `delete` call. This means that the cache is always up-to-date unless the database is modified outside of the API.
 
-When an LMDB transaction is started it is done at a global level. All `put` and `delete` calls operate solely against a temporary cache until the user provided callback completes. Then an IndexedDB transaction is started and all changes are written to IndexedDB. If the user provided callback throws an error, the transaction is aborted and the primary cache and IndexedDB are not updated.
+When an LMDB transaction is started it is done at a global level. All `put` and `delete` calls operate solely against a temporary cache until the user provided callback completes. Then, an IndexedDB transaction is started and all changes are written to IndexedDB. If the user provided callback throws an error or returns ABORT, the transaction is aborted and the primary cache and IndexedDB are not updated.
+
+When synchronous versions of async functions that result in asynchronous IndexedDB activity are called, the IndexedDB functions are invoked but not tracked with the exception of errors, which are logged to the console.
 
 # Updates (Reverse Chronological Order)
 
-2023-03-28 v0.0.1 Initial release. open, put, get, delete, transaction all at basic level of functionality
+2023-04-01 v0.0.2 Unit tests for open, put, putSync, get, remove, removeSync, clearSync, clearAsync, drop, dropSync, transaction. 
+
+2023-03-29 v0.0.1 Initial release. open, put, get, remove, transaction all at basic level of functionality

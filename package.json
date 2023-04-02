@@ -1,10 +1,10 @@
 {
   "name": "lmdb-indexeddb",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "LMDB API wrapped around IndexedDB to make LMDB available in the browser",
   "main": "lmdb-indexeddb.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: only in browser testing supported\" && exit 1"
   },
   "repository": {
     "type": "git",
