@@ -466,6 +466,7 @@ class LMDB {
         return this.#idb.version;
     }
     clearSync() {
+        console.warn("clearSync is DISCOURAGED, success is not tracked, use await clearAsync instead");
         try { this.keys = new Keys() } catch(e) {}; // this.keys may have been redefined by transaction commit
         this.#keys = new Keys();
         this.#cache = {};
@@ -566,7 +567,7 @@ class LMDB {
                 entry.value = conditionalDecompress(conditionalDecrypt(entry.value,entry.encrypted ? this.encryptionKey : undefined),entry.compression);
                 delete entry.encrypted;
                 delete entry.compression;
-                entry.value = JSON.parse(entry.value);
+                entry.value = JSON.parse(entry.value,parse);
             } catch(e) {
 
             }
@@ -603,7 +604,7 @@ class LMDB {
                 entry.value = conditionalDecompress(conditionalDecrypt(entry.value,entry.encrypted ? this.encryptionKey : undefined),entry.compression);
                 delete entry.encrypted;
                 delete entry.compression;
-                entry.value = JSON.parse(entry.value);
+                entry.value = JSON.parse(entry.value,parse);
             } catch(e) {
 
             }
@@ -710,7 +711,7 @@ class LMDB {
         return new Promise(async (resolve,reject) => {
             const idbTransaction = this.#idb.transaction([this.#name],"readwrite"),
                 idbObjectStore = idbTransaction.objectStore(this.#name),
-                storedEntry = {version:entry.version,value:conditionalEncrypt(conditionalCompress(entry.value,this.compression),this.encryptionKey)};
+                storedEntry = {version:entry.version,value:conditionalEncrypt(conditionalCompress(JSON.stringify(entry.value,stringify),this.compression),this.encryptionKey)};
             if(this.compression) storedEntry.compression = this.compression;
             if(this.encryptionKey) storedEntry.encrypted = true;
             const request = idbObjectStore.put(storedEntry,skey);
@@ -723,6 +724,7 @@ class LMDB {
         })
     }
     putSync(key,value,version=1,ifVersion) {
+        console.warn("putSync is DISCOURAGED, success is not tracked, use await put instead");
         const skey = toKey(key);
         if(TRANSACTION) return TRANSACTION.transaction.put(this,key,value,version,ifVersion);
         let entry = this.getEntry(key);
@@ -732,7 +734,7 @@ class LMDB {
         if(version) entry.version = version;
         const idbTransaction = this.#idb.transaction([this.#name],"readwrite"),
             idbObjectStore = idbTransaction.objectStore(this.#name),
-            storedEntry = {version:entry.version,value:conditionalEncrypt(conditionalCompress(entry.value,this.compression),this.encryptionKey)};
+            storedEntry = {version:entry.version,value:conditionalEncrypt(conditionalCompress(JSON.stringify(entry.value,stringify),this.compression),this.encryptionKey)};
         if(this.compression) storedEntry.compression = this.compression;
         if(this.encryptionKey) storedEntry.encrypted = true;
         const request = idbObjectStore.put(storedEntry,skey);
@@ -782,6 +784,7 @@ class LMDB {
         })
     }
     removeSync(key,ifVersion) {
+        console.warn("removeSync is DISCOURAGED, success is not tracked, use await removeSync instead");
         if(TRANSACTION) return TRANSACTION.transaction.remove(this,key,ifVersion)
         const entry = this.getEntry(key);
         if(!entry || (ifVersion && entry.version!==ifVersion)) return false;

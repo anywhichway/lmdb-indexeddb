@@ -107,9 +107,15 @@ In order to support a synchronous API, the IndexedDB API is wrapped in a synchro
 
 When an LMDB transaction is started it is done at a global level. All `put` and `delete` calls operate solely against a temporary cache until the user provided callback completes. Then, an IndexedDB transaction is started and all changes are written to IndexedDB. If the user provided callback throws an error or returns ABORT, the transaction is aborted and the primary cache and IndexedDB are not updated.
 
-When synchronous versions of async functions that result in asynchronous IndexedDB activity are called, the IndexedDB functions are invoked but not tracked with the exception of errors, which are logged to the console.
+When synchronous versions of async functions that result in asynchronous IndexedDB activity are called, the IndexedDB functions are invoked but not tracked with the exception of errors, which are logged to the console. As a result, the use of `putSync`,`removeSync` and `clearSync` is DISCOURAGED and warnings are written to the console. The method `get`, which is synchronous, is safe to use since it only access the cache (all data in a local IndexedDB is loaded when the darabases is opened, no IndexedDB activity occurs when `get` is called).
+
+A non-standard method `getEntryAsyc` is provided to allow the user to access the IndexedDB entry after opening. The method takes a `key` and an optional second argument `force` which, if `true`, will force the IndexedDB entry to be loaded into the cache. This is useful for debugging of if the database is updated via an alternate mechanism. To load multiple entries you can also use the standard method `prefetch`.
+
+The method `resetReadTxnAsync` will reset the cache of a database and load all data from IndexedDB. This is useful if the database is updated via an alternate mechanism. The method `resetReadTxn`is not implemented and will throw an error.
 
 # Updates (Reverse Chronological Order)
+
+2023-04-02 v0.0.3 Unit tests for keys and entries. Fixed issue with serializing symbols.
 
 2023-04-01 v0.0.2 Unit tests for open, put, putSync, get, remove, removeSync, clearSync, clearAsync, drop, dropSync, transaction. 
 

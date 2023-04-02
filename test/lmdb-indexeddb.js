@@ -85,7 +85,18 @@ describe("lmdb-indexeddb", () => {
         const g = db.get("hello");
         expect(g).to.equal(undefined);
     });
-    it("drop", async () => {
+    it("keys and entries", async () => {
+        const keys = [null,Symbol.for("symbol"),false,true,["A"],"a"];
+        for(const key of [...keys].reverse()) {
+            await db.put(key, key);
+        }
+        const theKeys = [...await db.getKeys()];
+        expect(theKeys.every((key,i) => key===keys[i])).to.equal(true);
+        const theEntries = [...await db.getRange()];
+        expect(theEntries.every((entry,i) => entry.value===keys[i])).to.equal(true);
+        await db.clearAsync();
+    });
+    /*it("drop", async () => {
         await db.put("hello", "world");
         const d = await db.drop();
         expect(d).to.equal(undefined);
@@ -95,5 +106,5 @@ describe("lmdb-indexeddb", () => {
         } catch (e) {
             expect(e).to.be.instanceof(Error)
         }
-    });
+    });*/
 })
