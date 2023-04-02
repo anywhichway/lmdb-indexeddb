@@ -344,7 +344,7 @@ class Transaction {
                                     version: value.version,
                                     value: conditionalEncrypt(conditionalCompress(value.value, lmdb.compression), lmdb.encryptionKey)
                                 };
-                                if (lmdb.compression) entry.compression = lmdb.compression;
+                                if (lmdb.compression) entry.compressed = lmdb.compression;
                                 if (lmdb.encryptionKey) entry.encrypted = true;
                                 idbObjectStore.put(entry, key).withEventListener("success", (event) => {
                                     lmdb.cache[key] = value;
@@ -418,7 +418,7 @@ class LMDB {
                 if(cursor) {
                     const entry = entries[cursor.key] = cursor.value,
                         type = typeof(entry.value);
-                    if(type==="string" || (entry.encrypted || entry.compression)) entry.raw = true;
+                    if(type==="string" || (entry.encrypted || entry.compressed)) entry.raw = true;
                     cursor.continue();
                 }
                 lmdb = new LMDB({path,name,idb,entries,...rest});
@@ -515,7 +515,7 @@ class LMDB {
     drop() {
         new Promise(async (resolve,reject) => {
             if(TRANSACTION) TRANSACTION.transaction.abort();
-            await this.clearSync();
+            await this.clearAsync();
             try { this.keys = null } catch(e) {}
             this.#keys = null;
             this.#cache = null;
@@ -528,6 +528,7 @@ class LMDB {
         });
     }
     dropSync() {
+            console.warn("dropSync is DISCOURAGED, success is not tracked, use await dropAsync instead");
             if(TRANSACTION) TRANSACTION.transaction.abort();
             this.clearSync();
             this.keys = null;
@@ -564,9 +565,9 @@ class LMDB {
         if(entry?.raw) {
             delete entry.raw;
             try {
-                entry.value = conditionalDecompress(conditionalDecrypt(entry.value,entry.encrypted ? this.encryptionKey : undefined),entry.compression);
+                entry.value = conditionalDecompress(conditionalDecrypt(entry.value,entry.encrypted ? this.encryptionKey : undefined),entry.compressed);
                 delete entry.encrypted;
-                delete entry.compression;
+                delete entry.compressed;
                 entry.value = JSON.parse(entry.value,parse);
             } catch(e) {
 
@@ -601,9 +602,9 @@ class LMDB {
         if(entry.raw) {
             delete entry.raw;
             try {
-                entry.value = conditionalDecompress(conditionalDecrypt(entry.value,entry.encrypted ? this.encryptionKey : undefined),entry.compression);
+                entry.value = conditionalDecompress(conditionalDecrypt(entry.value,entry.encrypted ? this.encryptionKey : undefined),entry.compressed);
                 delete entry.encrypted;
-                delete entry.compression;
+                delete entry.compressed;
                 entry.value = JSON.parse(entry.value,parse);
             } catch(e) {
 
@@ -704,7 +705,7 @@ class LMDB {
         const skey = toKey(key);
         if(TRANSACTION) return TRANSACTION.transaction.put(this,key,value,version,ifVersion);
         let entry = this.getEntry(key);
-        if(ifVersion && (entry==null || !entry.version==ifVersion)) return false;
+        if(ifVersion && (entry==null || entry.version!==ifVersion)) return false;
         if(entry==null) entry = {version,value};
         else entry.value = value;
         if(version) entry.version = version;
@@ -712,7 +713,7 @@ class LMDB {
             const idbTransaction = this.#idb.transaction([this.#name],"readwrite"),
                 idbObjectStore = idbTransaction.objectStore(this.#name),
                 storedEntry = {version:entry.version,value:conditionalEncrypt(conditionalCompress(JSON.stringify(entry.value,stringify),this.compression),this.encryptionKey)};
-            if(this.compression) storedEntry.compression = this.compression;
+            if(this.compression) storedEntry.compressed= this.compression;
             if(this.encryptionKey) storedEntry.encrypted = true;
             const request = idbObjectStore.put(storedEntry,skey);
             idbTransaction.withEventListener("complete", (event) => {
@@ -728,14 +729,14 @@ class LMDB {
         const skey = toKey(key);
         if(TRANSACTION) return TRANSACTION.transaction.put(this,key,value,version,ifVersion);
         let entry = this.getEntry(key);
-        if(ifVersion && (entry==null || !entry.version==ifVersion)) return false;
+        if(ifVersion && (entry==null || entry.version!==ifVersion)) return false;
         if(entry==null) entry = {version,value};
         else entry.value = value;
         if(version) entry.version = version;
         const idbTransaction = this.#idb.transaction([this.#name],"readwrite"),
             idbObjectStore = idbTransaction.objectStore(this.#name),
             storedEntry = {version:entry.version,value:conditionalEncrypt(conditionalCompress(JSON.stringify(entry.value,stringify),this.compression),this.encryptionKey)};
-        if(this.compression) storedEntry.compression = this.compression;
+        if(this.compression) storedEntry.compressed = this.compression;
         if(this.encryptionKey) storedEntry.encrypted = true;
         const request = idbObjectStore.put(storedEntry,skey);
         idbTransaction.withEventListener("error", (event) => console.error(event.target.error));
@@ -784,7 +785,7 @@ class LMDB {
         })
     }
     removeSync(key,ifVersion) {
-        console.warn("removeSync is DISCOURAGED, success is not tracked, use await removeSync instead");
+        console.warn("removeSync is DISCOURAGED, success is not tracked, use await removeAsync instead");
         if(TRANSACTION) return TRANSACTION.transaction.remove(this,key,ifVersion)
         const entry = this.getEntry(key);
         if(!entry || (ifVersion && entry.version!==ifVersion)) return false;
@@ -820,7 +821,7 @@ class LMDB {
                 if(cursor) {
                     const entry = entries[cursor.key] = cursor.value,
                         type = typeof(entry.value);
-                    if(type==="string" || (entry.encrypted || entry.compression)) entry.raw = true;
+                    if(type==="string" || (entry.encrypted || entry.compressed)) entry.raw = true;
                     cursor.continue();
                 }
                 this.#cache = entries;

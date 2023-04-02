@@ -96,7 +96,7 @@ describe("lmdb-indexeddb", () => {
         expect(theEntries.every((entry,i) => entry.value===keys[i])).to.equal(true);
         await db.clearAsync();
     });
-    /*it("drop", async () => {
+    it("drop", async () => {
         await db.put("hello", "world");
         const d = await db.drop();
         expect(d).to.equal(undefined);
@@ -106,5 +106,72 @@ describe("lmdb-indexeddb", () => {
         } catch (e) {
             expect(e).to.be.instanceof(Error)
         }
-    });*/
+    });
+    it("open and put/get compressed", async () => {
+        db = await open("test",{compression:true});
+        const p = await db.put("hello", "world");
+        expect(p).to.equal(true);
+        const g = db.getEntry("hello");
+        expect(g.value).to.equal("world");
+        expect(g.compression).to.equal(undefined);
+        return new Promise((resolve,reject) => {
+            const request = db.idb.transaction(["null"]).objectStore("null").get(JSON.stringify("hello"));
+            request.onsuccess = () => {
+                const entry = request.result;
+                expect(entry.compressed).to.equal(true);
+                expect(typeof(entry.value)).to.equal("string");
+                expect(entry.value).to.not.equal(JSON.stringify("world"));
+                resolve();
+            }
+            request.onerror = reject;
+        }).then(async () => {
+            await db.drop();
+        });
+    });
+    it("open and put/get encrypted", async () => {
+        db = await open("test",{encryptionKey:"encrypt"});
+        const p = await db.put("hello", "world");
+        expect(p).to.equal(true);
+        const g = db.getEntry("hello");
+        expect(g.value).to.equal("world");
+        expect(g.encrypted).to.equal(undefined);
+        return new Promise((resolve,reject) => {
+            const request = db.idb.transaction(["null"]).objectStore("null").get(JSON.stringify("hello"));
+            request.onsuccess = () => {
+                const entry = request.result;
+                expect(entry.encrypted).to.equal(true);
+                expect(typeof(entry.value)).to.equal("object");
+                expect(entry.value).to.be.instanceOf(Int32Array);
+                resolve();
+            }
+            request.onerror = reject;
+        }).then(async () => {
+            await db.drop();
+        });
+    });
+    it("open useVersions", async () => {
+        db = await open("test",{useVersions:true});
+        let p = await db.put("hello", "world");
+        expect(p).to.equal(true);
+        let g = db.getEntry("hello");
+        expect(g.value).to.equal("world");
+        expect(g.version).to.equal(1);
+        await db.put("hello", "world",2);
+        g = db.getEntry("hello");
+        expect(g.value).to.equal("world");
+        expect(g.version).to.equal(2);
+        await db.put("hello", "world",3,1);
+        g = db.getEntry("hello");
+        expect(g.value).to.equal("world");
+        expect(g.version).to.equal(2);
+        db.putSync("hello", "world",3,1);
+        g = db.getEntry("hello");
+        expect(g.value).to.equal("world");
+        expect(g.version).to.equal(2);
+        await db.put("hello", "world",3,2);
+        g = db.getEntry("hello");
+        expect(g.value).to.equal("world");
+        expect(g.version).to.equal(3);
+        await db.drop();
+    });
 })
