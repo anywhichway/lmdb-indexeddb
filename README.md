@@ -1,7 +1,7 @@
 # lmdb-indexeddb
 LMDB API wrapped around IndexedDB to make LMDB available in the browser.
 
-This is BETA software. Most unit tests are in place, but the software has not been heavily used.
+This is ALPHA software. Most unit tests are in place, but the software has not been heavily used and replication of record removal is not implemented and replication in the context of transactions has not been tested.
 
 # Installation
 
@@ -99,19 +99,6 @@ See the dircetory `examples` for examples.
 
 ```
 
-# Roadmap
-
-## Replication
-
-### Phase One
-
-Addition of `replicate` method that will take `put`, `get`, `getKeys`, `remove` functions as arguments and either get values from a remote database or put and remove them from a remote database via HTTPS. Functions like `clear` and `drop` are not currently planned.
-
-### Phase Two
-
-Web sockets for push and pull replication. When a push is made the in memory cache will be updated accordingly. In order to avoid overload, the client will only get values for keys it on which it has done a `get` (effectively a subscribe) and will only get new keys that are within the range it has requested using `getKeys`.
-
-
 # Implementation Notes
 
 ## API Calls
@@ -124,9 +111,9 @@ When an LMDB transaction is started it is done at a global level. All `put` and 
 
 When synchronous versions of async functions that result in asynchronous IndexedDB activity are called, the IndexedDB functions are invoked but not tracked with the exception of errors, which are logged to the console. As a result, the use of `putSync`,`removeSync` and `clearSync` is DISCOURAGED and warnings are written to the console. The method `get`, which is synchronous, is safe to use since it only access the cache (all data in a local IndexedDB is loaded when the darabases is opened, no IndexedDB activity occurs when `get` is called).
 
-A non-standard method `getEntryAsyc` is provided to allow the user to access the IndexedDB entry after opening. The method takes a `key` and an optional second argument `force` which, if `true`, will force the IndexedDB entry to be loaded into the cache. This is useful for debugging of if the database is updated via an alternate mechanism. To load multiple entries you can also use the standard method `prefetch`.
+A non-standard method `getEntryAsyc` is provided to allow the user to access the IndexedDB entry after opening. The method takes a `key` and an optional second argument `force` which, if `true`, will force the IndexedDB entry to be loaded into the cache. This is useful for debugging or if the database is updated via an alternate mechanism. To load multiple entries you can also use the standard method `prefetch`.
 
-In addition to `version` and `value`, the entry object in the database may have the boolean properties `compression` and `encrypted`. For consistency, these are not returned to the calling program, but they will be transmitted once replication is supported. Because these properties are stored, compression and encryption are not all or nothing propositions like the are with the NodeJS version of LMDB. You can have some entries compressed and some not, and the same for encryption. They will be automatically detected and handled appropriately. Note, if you do open a database without an encryption key any entries that are encrypted will have an `Int32Array` in their value property. Finally, when `useVersions` is set to `false`, the `version` property will not be present in the entry object when returned; however, in the datastore it will be version 1 when the entry is first created.
+In addition to `version` and `value`, the entry object in the database may have the boolean properties `compressed` and `encrypted` and a timestamp `mtime`. For consistency, these are not returned to the calling program, but they will be transmitted once replication is supported. Because these properties are stored, compression and encryption are not all or nothing propositions like they are with the NodeJS version of LMDB. You can have some entries compressed and some not, and the same for encryption. They will be automatically detected and handled appropriately. Note, if you do open a database without an encryption key any entries that are encrypted will have an `Int32Array` in their value property. Finally, when `useVersions` is set to `false`, the `version` property will not be present in the entry object when returned; however, in the datastore it will be version 1 when the entry is first created.
 
 The method `resetReadTxnAsync` will reset the cache of a database and load all data from IndexedDB. This is useful if the database is updated via an alternate mechanism. The method `resetReadTxn`is not implemented and will throw an error.
 
@@ -134,7 +121,33 @@ The method `resetReadTxnAsync` will reset the cache of a database and load all d
 
 Theoretically, same encryption and compression algorithms are used as in the NodeJS version of LMDB. However, compatibility has not yet been tested.
 
+## Synchronizing With Remote Databases
+
+The`replicate` method that takes `putRawEntry`, `getRawEntryAsync`, `getKeys`, `getRange`, `remove` functions as options that either get values from a remote database or put and remove them from a remote database via HTTPS. Functions like `clear` and `drop` are not currently planned.
+
+The `mtime` modification time stamp is used to resolve conflicts.
+
+To avoid conflicts with the remote database, if `mtime` of an entry on the remote server is greater than the machine time on which `lmdb-indexeddb` is running, the change is deferred with a timeout until the localtime is greater than or equal to the remote entry time. This means that `getEntryAsync`, `getAsync`, `put`, and `remove` all do a call to `#getRawEntryAsync` to uncover the `mtime` of the current value for the entry (if any) on the remote machine. Hence, they will not return until the local time is greater than or equal to the remote entry `mtime`. It is assumed that remote server time is more accurate than local time. If there is gap larger than 30 seconds, an error is thrown.
+
+In the highly unlikely case the `mtime` for the remote entry is identical to the `mtime` for the local action, then the action is deferred one JavaScript event cycle and re-executed. If the `mtimes` are the same again, an error is thrown. Otherwise, these rules are applied:
+
+- For a get action, the entry with the highest version number is returned, if versions are the same, the entry with the highest lexicographic value is returned. If necessary, the local cache and IndexedDB are updated to reflect the remote entry and a request is made to update the remote entry to match the local entry. Depending on its own conflict resolution or access control rules, the server may or may not update its version. If it rejects the update, then the get returns the server version, the local cache and indexedDB are updated and if inside a transaction, the transaction will be aborted.
+- For a put action, the entry with the highest version number is kept, if versions are the same, the highest lexicographic value is kept. If necessary, a request of the server is made to update the remote entry. Depending on its own conflict resolution or access control rules, the server may or may not update its version. If it refuses to make a requested update and the local version was to be used, the put action will return false and if inside a transaction, the transaction will be aborted. If the server version is to be used locally, then the put action will return false and if inside a transaction, the transaction will be aborted.
+
+### Not Yet Implemented
+- For a newly removed local entry, if the local version number is greater than or equal to the server version, a request is made to delete the version on the server. Depending on its own conflict resolution or access control rules, the server may or may not delete its version. If is refuses to delete its version, the delete action will return false and if inside a transaction, the transaction will be aborted.
+
+Note: If the server fails to return `version` and `mtime`, the local activity will always result in an update request to the server.
+
+
+## Future Enhancements
+
+Web sockets for push and pull replication. When a push is made the in memory cache will be updated accordingly. In order to avoid overload, the client will only get values for keys it on which it has done a `get` (effectively a subscribe) and will only get new keys that are within the range it has requested using `getKeys`.
+
+
 # Updates (Reverse Chronological Order)
+
+2023-04-05 v0.0.5 Basic replication for `put` and `get` working.
 
 2023-04-03 v0.0.4 Unit tests for transactions, compression, encryption, and versions. Fixed issue with conditional versioning not working. Enhanced implementation notes.
 

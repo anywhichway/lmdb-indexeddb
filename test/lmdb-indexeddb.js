@@ -174,4 +174,85 @@ describe("lmdb-indexeddb", () => {
         expect(g.version).to.equal(3);
         await db.drop();
     });
+    it("replicate put", async () => {
+        db = await open("test",{useVersions:true});
+        db.replication({
+            async getRawEntryAsync(key) {
+                const item = localStorage.getItem(key);
+                if(item) {
+                    return JSON.parse(item);
+                }
+            },
+            putRawEntry(key,entry) {
+                localStorage.setItem(JSON.stringify(key),JSON.stringify(entry));
+                return true;
+            }
+        })
+        await db.put("hello", "world");
+        const g = db.getEntry("hello");
+        expect(g.value).to.equal("world");
+        expect(g.version).to.equal(1);
+        const item = localStorage.getItem(JSON.stringify("hello")); // JSON.stringify("hello")
+        expect(typeof(item)).to.equal("string");
+        const entry = JSON.parse(item);
+        expect(entry.value).to.equal("world");
+        localStorage.clear();
+        await db.drop();
+    })
+    it("replicate put delayed by time", async () => {
+        const delay = 100,
+            entry = {value:"world",version:1,mtime:Date.now()+delay};
+        localStorage.setItem(JSON.stringify("hello"),JSON.stringify(entry));
+        db = await open("test",{useVersions:true});
+        db.replication({
+            async getRawEntryAsync(key) {
+                const item = localStorage.getItem(key);
+                if(item) {
+                    return JSON.parse(item);
+                }
+            },
+            putRawEntry(key,entry) {
+                localStorage.setItem(JSON.stringify(key),JSON.stringify(entry));
+                return true;
+            }
+        })
+        await db.put("hello", "world");
+        const g = db.getEntry("hello");
+        expect(g.value).to.equal("world");
+        expect(g.version).to.equal(1);
+        const item = localStorage.getItem(JSON.stringify("hello")); // JSON.stringify("hello")
+        expect(typeof(item)).to.equal("string");
+        const result = JSON.parse(item);
+        expect(entry.value).to.equal("world");
+        expect(result.mtime).greaterThan(entry.mtime);
+        localStorage.clear();
+        await db.drop();
+    })
+    it("replicate get server more recent", async () => {
+        db = await open("test",{useVersions:true});
+        db.replication({
+            async getRawEntryAsync(key) {
+                const item = localStorage.getItem(key);
+                if(item) {
+                    return JSON.parse(item);
+                }
+            },
+            putRawEntry(key,entry) {
+                localStorage.setItem(JSON.stringify(key),JSON.stringify(entry));
+                return true;
+            }
+        })
+        await db.put("hello", "world");
+        const delay = 100,
+            entry = {value:"my world",version:1,mtime:Date.now()+delay};
+        localStorage.setItem(JSON.stringify("hello"),JSON.stringify(entry));
+        const ga = await db.getEntryAsync("hello");
+        expect(ga.value).to.equal("my world");
+        expect(ga.version).to.equal(1);
+        const g = db.getEntry("hello");
+        expect(g.value).to.equal("my world");
+        expect(g.version).to.equal(1);
+        localStorage.clear();
+        await db.drop();
+    })
 })

@@ -379,15 +379,45 @@ let TRANSACTION;
 
 class LMDB {
     #cache;
-    #clearing
+    #clearing;
+    #compression;
+    #encryptionKey;
     #idb;
     #keys;
     #lastVersion;
-    #path;
     #name;
+    #path;
     #useVersions;
-    #encryptionKey;
-    #compression;
+    // for replication
+    #getKeys;
+    #getRange;
+    #getRawEntryAsync;
+    #putRawEntry;
+    #remove;
+    #transaction;
+
+    async #putRawEntryLocal(key,entry,sync) {
+        const skey = toKey(key);
+        if(!entry.mtime) entry.mtime = Date.now();
+        if(sync) {
+            this.#cache[skey] = entry;
+            this.#keys.add(key);
+        }
+        return new Promise(async (resolve,reject) => {
+            const idbTransaction = this.#idb.transaction([this.#name],"readwrite"),
+                idbObjectStore = idbTransaction.objectStore(this.#name),
+                storedEntry = {mtime:Date.now(),version:entry.version,value:conditionalEncrypt(conditionalCompress(JSON.stringify(entry.value,stringify),this.compression),this.encryptionKey)};
+            if(this.compression) storedEntry.compressed= this.compression;
+            if(this.encryptionKey) storedEntry.encrypted = true;
+            const request = idbObjectStore.put(storedEntry,skey);
+            idbTransaction.withEventListener("complete", (event) => {
+                this.#cache[skey] = entry;
+                this.#keys.add(key);
+                resolve(true);
+            }).withEventListener("error", (event) => reject(event.target.error));
+            request.withEventListener("error", (event) => reject(event.target.error));
+        })
+    }
     constructor({path,name=null,useVersions,encryptionKey,compression,entries,idb,...rest}) {
         Object.defineProperty(this,"idb",{value:idb});
         this.#idb = idb;
@@ -548,7 +578,7 @@ class LMDB {
     }
     async getAsync(key,force) {
         if(TRANSACTION) return TRANSACTION.transaction.getAsync(this,key,force);
-        const entry = await this.getEntryAsync(key,force);
+        const entry = await this.getEntryAsync(key);
         if(entry?.version) {
             this.#lastVersion = entry.version;
         }
@@ -575,13 +605,15 @@ class LMDB {
         }
         return entry;
     }
-    async getEntryAsync(key,force) {
+    async getEntryAsync(key,force,future) {
         if(this.#clearing) {
             await this.#clearing;
             return;
         }
+        const mtime = Date.now();
         const skey = toKey(key);
         let entry = this.#cache[skey];
+
         if(!entry || force) {
             const idbTransaction = this.#idb.transaction([this.#name],"readonly"),
                 idbObjectStore = idbTransaction.objectStore(this.#name);
@@ -599,7 +631,7 @@ class LMDB {
                 if(type==="string" || (entry.value && type==="object" && entry.value instanceof Int32Array)) entry.raw = true;
             }
         }
-        if(entry.raw) {
+        if(entry?.raw) {
             delete entry.raw;
             try {
                 entry.value = conditionalDecompress(conditionalDecrypt(entry.value,entry.encrypted ? this.encryptionKey : undefined),entry.compressed);
@@ -608,6 +640,40 @@ class LMDB {
                 entry.value = JSON.parse(entry.value,parse);
             } catch(e) {
 
+            }
+        }
+        const remoteEntry = this.#getRawEntryAsync ? await this.#getRawEntryAsync(skey,force) : undefined;
+        if(remoteEntry) {
+            try {
+                remoteEntry.value = conditionalDecompress(conditionalDecrypt(remoteEntry.value,remoteEntry.encrypted ? this.encryptionKey : undefined),remoteEntry.compressed);
+                delete remoteEntry.encrypted;
+                delete remoteEntry.compressed;
+                remoteEntry.value = JSON.parse(remoteEntry.value,parse);
+            } catch(e) {
+
+            }
+        }
+        const delta = (remoteEntry?.mtime||0) - (future||entry?.mtime||mtime);
+        if(delta>1000*30) {
+            throw new Error("Remote entry is too far in the future. Local clock is probably wrong.");
+        }
+        if(delta>0) {
+            return new Promise((resolve,reject) => {
+                setTimeout(async () => {
+                    resolve(await this.getEntryAsync(key,force,remoteEntry?.mtime||Date.now()));
+                },delta);
+            })
+        }
+        if(remoteEntry?.version>entry?.version || remoteEntry?.mtime>entry?.mtime || (remoteEntry && remoteEntry?.mtime===entry?.mtime && (entry?.value==null || JSON.stringify(remoteEntry.value)>JSON.stringify(entry.value)))) {
+            entry = remoteEntry;
+            await this.#putRawEntryLocal(key,remoteEntry);
+        } else if(entry && this.#putRawEntry) {
+            const result = await this.#putRawEntry(key,entry);
+            if(!result && TRANSACTION) {
+                TRANSACTION.transaction.abort();
+                const error = new Error("Remote server rejected local entry. Transaction aborted.")
+                console.error(error);
+                throw error;
             }
         }
         return entry;
@@ -704,28 +770,20 @@ class LMDB {
     async put(key,value,version=1,ifVersion) {
         const skey = toKey(key);
         if(TRANSACTION) return TRANSACTION.transaction.put(this,key,value,version,ifVersion);
-        let entry = this.getEntry(key);
+        let entry = await this.getEntryAsync(key);
         if(ifVersion && (entry==null || entry.version!==ifVersion)) return false;
-        if(entry==null) entry = {version,value};
+        let remoteVersion;
+        if(entry==null) entry = remoteVersion = {version,value};
         else entry.value = value;
         if(version) entry.version = version;
-        return new Promise(async (resolve,reject) => {
-            const idbTransaction = this.#idb.transaction([this.#name],"readwrite"),
-                idbObjectStore = idbTransaction.objectStore(this.#name),
-                storedEntry = {version:entry.version,value:conditionalEncrypt(conditionalCompress(JSON.stringify(entry.value,stringify),this.compression),this.encryptionKey)};
-            if(this.compression) storedEntry.compressed= this.compression;
-            if(this.encryptionKey) storedEntry.encrypted = true;
-            const request = idbObjectStore.put(storedEntry,skey);
-            idbTransaction.withEventListener("complete", (event) => {
-                this.#cache[skey] = entry;
-                this.#keys.add(key);
-                resolve(true);
-            }).withEventListener("error", (event) => reject(event.target.error));
-            request.withEventListener("error", (event) => reject(event.target.error));
-        })
+        entry.mtime = Date.now();
+        let remoteSuccess = true
+        if(remoteVersion && this.#putRawEntry) remoteSuccess = await this.#putRawEntry(key,entry);
+        if(remoteSuccess) return await this.#putRawEntryLocal(key,entry);
+        throw new Error("Remote server rejected local entry. Put aborted.")
     }
     putSync(key,value,version=1,ifVersion) {
-        console.warn("putSync is DISCOURAGED, success is not tracked, use await put instead");
+        console.warn("putSync is DISCOURAGED, success is not tracked and it is unable to get the latest server version if using replication, use await put instead");
         const skey = toKey(key);
         if(TRANSACTION) return TRANSACTION.transaction.put(this,key,value,version,ifVersion);
         let entry = this.getEntry(key);
@@ -733,17 +791,8 @@ class LMDB {
         if(entry==null) entry = {version,value};
         else entry.value = value;
         if(version) entry.version = version;
-        const idbTransaction = this.#idb.transaction([this.#name],"readwrite"),
-            idbObjectStore = idbTransaction.objectStore(this.#name),
-            storedEntry = {version:entry.version,value:conditionalEncrypt(conditionalCompress(JSON.stringify(entry.value,stringify),this.compression),this.encryptionKey)};
-        if(this.compression) storedEntry.compressed = this.compression;
-        if(this.encryptionKey) storedEntry.encrypted = true;
-        const request = idbObjectStore.put(storedEntry,skey);
-        idbTransaction.withEventListener("error", (event) => console.error(event.target.error));
-        request.withEventListener("error", (event) => console.error(event.target.error));
-        this.#cache[skey] = entry;
-        this.#keys.add(key);
-        return true
+        this.#putRawEntryLocal(key,entry,true);
+        return true;
     }
     async prefetch(keys,callback) {
         if(this.#clearing) {
@@ -785,7 +834,7 @@ class LMDB {
         })
     }
     removeSync(key,ifVersion) {
-        console.warn("removeSync is DISCOURAGED, success is not tracked, use await removeAsync instead");
+        console.warn("removeSync is DISCOURAGED, success is not tracked, use await remove instead");
         if(TRANSACTION) return TRANSACTION.transaction.remove(this,key,ifVersion)
         const entry = this.getEntry(key);
         if(!entry || (ifVersion && entry.version!==ifVersion)) return false;
@@ -799,6 +848,14 @@ class LMDB {
         idbTransaction.withEventListener("error", (event) => console.error(event.target.error));
         idbObjectStore.delete(skey).withEventListener("error", (event) => console.error(error));
         return true
+    }
+    replication({getKeys,getRange,getRawEntryAsync,putRawEntry,remove,transaction}) {
+        this.#getKeys = getKeys;
+        this.#getRange = getRange;
+        this.#getRawEntryAsync = getRawEntryAsync;
+        this.#putRawEntry = putRawEntry;
+        this.#remove = remove;
+        this.#transaction = transaction;
     }
     resetReadTxn() {
         throw new Error("resetReadTxn not implemented. Use resetReadTxnAsync instead.");
