@@ -354,7 +354,7 @@ class Transaction {
                         }));
                         return promises;
                     },promises);
-                    Object.defineProperty(lmdb, "keys", {configurable: true, value: TRANSACTION.transaction.keys[name]});
+                    lmdb.keys = TRANSACTION.transaction.keys[name];
                 });
                 TRANSACTION.transaction.committed = true;
                 Promise.all(promises).then(() => {
@@ -486,6 +486,9 @@ class LMDB {
     get keys() {
         return [...this.#keys]
     }
+    set keys(keys) {
+        this.#keys = keys instanceof Keys ? keys : new Keys(keys);
+    }
     get name() {
         return this.#name;
     }
@@ -497,7 +500,6 @@ class LMDB {
     }
     clearSync() {
         console.warn("clearSync is DISCOURAGED, success is not tracked, use await clearAsync instead");
-        try { this.keys = new Keys() } catch(e) {}; // this.keys may have been redefined by transaction commit
         this.#keys = new Keys();
         this.#cache = {};
         if(TRANSACTION) TRANSACTION.transaction.abort();
@@ -561,7 +563,6 @@ class LMDB {
             console.warn("dropSync is DISCOURAGED, success is not tracked, use await dropAsync instead");
             if(TRANSACTION) TRANSACTION.transaction.abort();
             this.clearSync();
-            this.keys = null;
             this.#keys = null;
             this.#cache = null;
             const request = indexedDB.deleteDatabase(this.#path+"/"+this.#name).withEventListener("error", (event) => {
@@ -642,7 +643,7 @@ class LMDB {
 
             }
         }
-        const remoteEntry = this.#getRawEntryAsync ? await this.#getRawEntryAsync(skey,force) : undefined;
+        const remoteEntry = this.#getRawEntryAsync ? await this.#getRawEntryAsync(key) : undefined;
         if(remoteEntry) {
             try {
                 remoteEntry.value = conditionalDecompress(conditionalDecrypt(remoteEntry.value,remoteEntry.encrypted ? this.encryptionKey : undefined),remoteEntry.compressed);
@@ -652,6 +653,18 @@ class LMDB {
             } catch(e) {
 
             }
+        }
+        if(remoteEntry?.mtime===mtime) {
+            if(future) {
+                const error = new Error(`Remote entry has same mtime, ${remoteEntry.mtime}, as local event time after waiting for remote entry to be in in the past.`);
+                console.error(error);
+                throw error;
+            }
+            return new Promise((resolve,reject) => {
+                setTimeout(async () => {
+                    resolve(await this.getEntryAsync(key,force,remoteEntry.mtime));
+                });
+            })
         }
         const delta = (remoteEntry?.mtime||0) - (future||entry?.mtime||mtime);
         if(delta>1000*30) {
@@ -664,7 +677,7 @@ class LMDB {
                 },delta);
             })
         }
-        if(remoteEntry?.version>entry?.version || remoteEntry?.mtime>entry?.mtime || (remoteEntry && remoteEntry?.mtime===entry?.mtime && (entry?.value==null || JSON.stringify(remoteEntry.value)>JSON.stringify(entry.value)))) {
+        if((!entry && remoteEntry) || (this.#useVersions && remoteEntry?.version>entry?.version) || (!this.#useVersions && remoteEntry?.mtime>entry?.mtime) || (remoteEntry && remoteEntry?.mtime===entry?.mtime && (entry?.value==null || JSON.stringify(remoteEntry.value)>JSON.stringify(entry.value)))) {
             entry = remoteEntry;
             await this.#putRawEntryLocal(key,remoteEntry);
         } else if(entry && this.#putRawEntry) {
@@ -771,10 +784,10 @@ class LMDB {
         const skey = toKey(key);
         if(TRANSACTION) return TRANSACTION.transaction.put(this,key,value,version,ifVersion);
         let entry = await this.getEntryAsync(key);
-        if(ifVersion && (entry==null || entry.version!==ifVersion)) return false;
+        if(entry && entry.value!==value) return false;
+        if(ifVersion && (entry==null || (ifVersion && entry?.version!==ifVersion))) return false;
         let remoteVersion;
         if(entry==null) entry = remoteVersion = {version,value};
-        else entry.value = value;
         if(version) entry.version = version;
         entry.mtime = Date.now();
         let remoteSuccess = true
@@ -783,15 +796,24 @@ class LMDB {
         throw new Error("Remote server rejected local entry. Put aborted.")
     }
     putSync(key,value,version=1,ifVersion) {
-        console.warn("putSync is DISCOURAGED, success is not tracked and it is unable to get the latest server version if using replication, use await put instead");
+        console.warn("putSync is DISCOURAGED, success is not tracked, use await put instead");
         const skey = toKey(key);
-        if(TRANSACTION) return TRANSACTION.transaction.put(this,key,value,version,ifVersion);
-        let entry = this.getEntry(key);
-        if(ifVersion && (entry==null || entry.version!==ifVersion)) return false;
+        let entry = this.#cache[skey];
+        const oldEntry = entry ? {...entry} : undefined;
+        if(this.#useVersions && ifVersion && oldEntry.version!==ifVersion) return false;
         if(entry==null) entry = {version,value};
         else entry.value = value;
         if(version) entry.version = version;
-        this.#putRawEntryLocal(key,entry,true);
+        this.#cache[skey] = entry;
+        this.put(key,value,version,ifVersion).catch((error) => {
+            console.log(error);
+            if(oldEntry) {
+                this.#cache[skey] = oldEntry;
+            } else {
+                delete this.#cache[skey];
+                this.#keys.remove(key);
+            }
+        });
         return true;
     }
     async prefetch(keys,callback) {
@@ -815,10 +837,64 @@ class LMDB {
             }).withEventListener("error", (event) => reject(event.target.error));
         })
     }
-    async remove(key,ifVersion) {
+    async remove(key,ifVersion,future) {
         if(TRANSACTION) return TRANSACTION.transaction.remove(this,key,ifVersion)
-        const entry = this.getEntry(key);
-        if(!entry || (ifVersion && entry.version!==ifVersion)) return false;
+        const entry = this.getEntry(key),
+            mtime = Date.now();
+        const remoteEntry = this.#getRawEntryAsync ? await this.#getRawEntryAsync(key,true) : undefined;
+        if(remoteEntry) {
+            try {
+                remoteEntry.value = conditionalDecompress(conditionalDecrypt(remoteEntry.value,remoteEntry.encrypted ? this.encryptionKey : undefined),remoteEntry.compressed);
+                delete remoteEntry.encrypted;
+                delete remoteEntry.compressed;
+                remoteEntry.value = JSON.parse(remoteEntry.value,parse);
+            } catch(e) {
+
+            }
+        }
+        if((!entry && !remoteEntry) || (ifVersion && entry.version!==ifVersion)) return false;
+        if(remoteEntry?.mtime===mtime) {
+            if(future) {
+                const error = new Error(`Remote entry has same mtime, ${remoteEntry.mtime}, as local event time after waiting for remote entry to be in in the past.`);
+                console.error(error);
+                throw error;
+            }
+            return new Promise((resolve,reject) => {
+                setTimeout(async () => {
+                    resolve(await this.remove(key,ifVersion,remoteEntry.mtime));
+                });
+            })
+        }
+        const delta = (remoteEntry?.mtime||0) - (future||entry?.mtime||mtime);
+        if(delta>1000*30) {
+            const error = new Error("Remote entry is too far in the future. Local clock is probably wrong.");
+            console.error(error);
+            throw error;
+        }
+        if(delta>0) {
+            return new Promise((resolve,reject) => {
+                setTimeout(async () => {
+                    resolve(await this.getEntryAsync(key,force,remoteEntry?.mtime||Date.now()));
+                },delta);
+            })
+        }
+        if((this.#useVersions && remoteEntry?.version<=entry?.version) || (!this.#useVersions && remoteEntry?.mtime<=entry?.mtime)) {
+            const result = await this.#remove(key);
+            if(!result && TRANSACTION) {
+                TRANSACTION.transaction.abort();
+                const error = new Error("Remote server rejected key removal. Transaction aborted.")
+                console.error(error);
+                throw error;
+            }
+        } else if((this.#useVersions && remoteEntry?.version>entry?.version) || (!this.#useVersions && remoteEntry?.mtime>entry?.mtime)){
+            if(TRANSACTION) {
+                TRANSACTION.transaction.abort();
+                const error = new Error("Remote server version newer than local. Transaction aborted.")
+                console.error(error);
+                throw error;
+            }
+            return false;
+        }
         return new Promise((resolve,reject) => {
             const idbTransaction = this.#idb.transaction([this.#name],"readwrite"),
                 idbObjectStore = idbTransaction.objectStore(this.#name),
@@ -828,25 +904,27 @@ class LMDB {
                     this.#cache[skey] = null;
                     this.#keys.remove(key);
                 }
-                resolve(!!entry);
+                resolve(!!(entry||remoteEntry));
             }).withEventListener("error", (event) => reject(event.target.error));
             idbObjectStore.delete(skey).withEventListener("error", (event) => reject(event.target.error));
         })
     }
     removeSync(key,ifVersion) {
         console.warn("removeSync is DISCOURAGED, success is not tracked, use await remove instead");
-        if(TRANSACTION) return TRANSACTION.transaction.remove(this,key,ifVersion)
-        const entry = this.getEntry(key);
-        if(!entry || (ifVersion && entry.version!==ifVersion)) return false;
-        const skey = toKey(key);
-        if(this.#cache[skey]!==undefined) {
+        const skey = toKey(key),
+            oldEntry = this.#cache[skey];
+        if(oldEntry==null || (this.#useVersions && ifVersion && oldEntry.version!==ifVersion)) return false;
+        if(oldEntry!=null) {
             this.#cache[skey] = null;
             this.#keys.remove(key);
         }
-        const idbTransaction = this.#idb.transaction([this.#name],"readwrite"),
-            idbObjectStore = idbTransaction.objectStore(this.#name);
-        idbTransaction.withEventListener("error", (event) => console.error(event.target.error));
-        idbObjectStore.delete(skey).withEventListener("error", (event) => console.error(error));
+        this.remove(key,ifVersion).catch((error) => {
+            console.error(error);
+            if(oldEntry!==undefined) {
+                this.#cache[skey] = oldEntry;
+                this.#keys.add(key);
+            }
+        });
         return true
     }
     replication({getKeys,getRange,getRawEntryAsync,putRawEntry,remove,transaction}) {
