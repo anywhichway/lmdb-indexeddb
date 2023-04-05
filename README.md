@@ -1,7 +1,7 @@
 # lmdb-indexeddb
 LMDB API wrapped around IndexedDB to make LMDB available in the browser.
 
-This is ALPHA software. Most unit tests are in place, but the software has not been heavily used and replication of record removal is not implemented and replication in the context of transactions has not been tested.
+This is ALPHA software. Most unit tests are in place, but the software has not been heavily used and replication in the context of transactions has not been tested.
 
 # Installation
 
@@ -21,7 +21,7 @@ import {open} from "lmdb-indexeddb"
 
 # Examples
 
-See the dircetory `examples` for examples.
+See the directory `examples` for examples.
 
 ## Kitchen Sink
 
@@ -145,6 +145,8 @@ Web sockets for push and pull replication. When a push is made from the server, 
 
 
 # Updates (Reverse Chronological Order)
+
+2023-04-05 v0.0.7 LMDB treats `put("hello","world")` and `put(["hello"],"world")` at the same key, i.e. `"hello". Made this library consistent. Simplified core code for `remove`. Added more unit tests for replication and adjusted code accordingly.
 
 2023-04-04 v0.0.6 Basic replication for `remove` working.
 

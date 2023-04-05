@@ -20,6 +20,8 @@ const REPLICATION_FUNCTIONS = {
     }
 };
 
+localStorage.clear();
+
 describe("lmdb-indexeddb", () => {
     let db
     it("open", async () => {
@@ -107,7 +109,7 @@ describe("lmdb-indexeddb", () => {
         expect(g).to.equal(undefined);
     });
     it("keys and entries", async () => {
-        const keys = [null,Symbol.for("symbol"),false,true,["A"],"a"];
+        const keys = [null,Symbol.for("symbol"),false,true,"A","a"];
         for(const key of [...keys].reverse()) {
             await db.put(key, key);
         }
@@ -209,14 +211,15 @@ describe("lmdb-indexeddb", () => {
         localStorage.clear();
         await db.drop();
     })
-    it("replicate put delayed by time", async () => {
+    it("don't replicate put, but pull, when server version greater", async () => {
         const delay = 50,
             entry = {value:"world",version:2,mtime:Date.now()+delay};
         localStorage.setItem(JSON.stringify("hello"),JSON.stringify(entry));
         db = await open("test",{useVersions:true});
         db.replication(REPLICATION_FUNCTIONS);
-        await db.put("hello", "world");
-        const g = await db.getEntryAsync("hello");
+        const p = await db.put("hello", "world");
+        expect(p).to.equal(false);
+        const g = await db.getEntry("hello");
         expect(g.value).to.equal("world");
         expect(g.version).to.equal(2);
         const item = localStorage.getItem(JSON.stringify("hello")); // JSON.stringify("hello")
@@ -227,7 +230,7 @@ describe("lmdb-indexeddb", () => {
         localStorage.clear();
         await db.drop();
     })
-    it("replicate get server more recent", async () => {
+    it("pull replicate on get when server more recent", async () => {
         db = await open("test");
         db.replication(REPLICATION_FUNCTIONS)
         await db.put("hello", "world");
@@ -244,6 +247,21 @@ describe("lmdb-indexeddb", () => {
         await db.drop();
     })
     it("remove replicated", async () => {
+        db = await open("test",{useVersions:true});
+        await db.put("hello","world");
+        const delay = 50,
+            entry = {value:"world",version:2,mtime:Date.now()+delay};
+        localStorage.setItem(JSON.stringify("hello"),JSON.stringify(entry));
+        db.replication(REPLICATION_FUNCTIONS);
+        const result = await db.remove("hello");
+        expect(result).to.equal(false);
+        const g = db.getEntry("hello");
+        expect(g.value).to.equal("world");
+        expect(g.version).to.equal(2);
+        localStorage.clear();
+        await db.drop();
+    })
+    it("fail and pull for remove when server more recent", async () => {
         const entry = {value:"world",version:1,mtime:Date.now()};
         localStorage.setItem(JSON.stringify("hello"),JSON.stringify(entry));
         db = await open("test",{useVersions:true});
