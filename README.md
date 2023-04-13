@@ -6,6 +6,12 @@ The software has not been heavily used. Replication in the context of transactio
 performance testing has not been done. Encryption and compression compatibility with the NodeJS version has not been 
 tested.
 
+See also:
+
+[LMDB Cluster](https://github.com/anywhichway/lmdb-cluster) - A clustered version of LMDB that supports a REST API with sockets planned.
+
+[LMDB Query](https://github.com/anywhichway/lmdb-query) - A higher level query mechanism for LMDB supporting functional, declarative and RegExp filters without the overhead of an entire database wrapper.
+
 # Installation
 
 ```javascript
@@ -148,6 +154,8 @@ Web sockets for push and pull replication. When a push is made from the server, 
 
 
 # Updates (Reverse Chronological Order)
+
+2023-04-13 v0.0.9 Ehanced documentation.
 
 2023-04-07 v0.0.8 Documentation updates.
 

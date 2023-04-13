@@ -1,6 +1,6 @@
 {
   "name": "lmdb-indexeddb",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "LMDB API wrapped around IndexedDB to make LMDB available in the browser",
   "main": "lmdb-indexeddb.js",
   "scripts": {
